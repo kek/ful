@@ -1,4 +1,4 @@
-# dum
+# ful
 
 A terminal disk-usage monitor: a live, refreshing dashboard of mounted
 filesystems — usage bar, used/free/total, and per-device I/O.

@@ -20,7 +20,7 @@ use app::{App, Config};
 use datasource::{DataSource, SysinfoSource};
 
 #[derive(Parser)]
-#[command(name = "dum", about = "TUI disk usage monitor")]
+#[command(name = "ful", about = "TUI disk usage monitor")]
 struct Cli {
     /// Refresh interval in seconds
     #[arg(short, long, default_value_t = 2, value_parser = clap::value_parser!(u64).range(1..))]

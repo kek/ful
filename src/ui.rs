@@ -163,7 +163,7 @@ fn draw_title(app: &App, frame: &mut Frame, area: Rect) {
         Layout::horizontal([Constraint::Min(0), Constraint::Length(right.len() as u16 + 1)])
             .areas(area);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::from(" dum — disk usage monitor").bold())),
+        Paragraph::new(Line::from(Span::from(" ful — disk usage monitor").bold())),
         l,
     );
     frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), r);
@@ -201,7 +201,7 @@ fn draw_footer(app: &App, visible: usize, frame: &mut Frame, area: Rect) {
 
 fn draw_help(frame: &mut Frame, area: Rect) {
     let lines = vec![
-        Line::from("dum — keybindings"),
+        Line::from("ful — keybindings"),
         Line::from(""),
         Line::from("  q / Esc   quit"),
         Line::from("  ?         toggle this help"),
@@ -285,7 +285,7 @@ mod tests {
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| draw(&app, f)).unwrap();
         let text = buffer_text(term.backend().buffer());
-        assert!(text.contains("dum"));
+        assert!(text.contains("ful"));
         assert!(text.contains("MOUNT"));
         assert!(text.contains("WRITE/s"));
         assert!(text.contains("disk3s1"));
