@@ -3,6 +3,7 @@ name = "dum"
 version = "0.1.0"
 edition = "2021"
 description = "TUI disk usage monitor"
+license = "MIT"
 
 [dependencies]
 ratatui = "0.29"
