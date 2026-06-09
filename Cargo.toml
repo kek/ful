@@ -1,0 +1,11 @@
+[package]
+name = "dum"
+version = "0.1.0"
+edition = "2021"
+description = "TUI disk usage monitor"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+sysinfo = { version = "0.33", default-features = false, features = ["disk"] }
+clap = { version = "4", features = ["derive"] }
