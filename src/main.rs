@@ -1,3 +1,4 @@
+mod app;
 mod datasource;
 mod format;
 mod model;
