@@ -2,11 +2,27 @@
 name = "ful"
 version = "0.1.0"
 edition = "2021"
-description = "TUI disk usage monitor"
+description = "TUI disk usage monitor (ful) and live disk usage explorer (dum)"
 license = "MIT"
+
+[lib]
+name = "ful"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ful"
+path = "src/main.rs"
+
+[[bin]]
+name = "dum"
+path = "src/bin/dum/main.rs"
 
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
 sysinfo = { version = "0.33", default-features = false, features = ["disk"] }
 clap = { version = "4", features = ["derive"] }
+notify = "8"
+
+[dev-dependencies]
+tempfile = "3"
