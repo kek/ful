@@ -94,7 +94,7 @@ pub fn signed_rate(glow: f64) -> String {
 }
 
 fn usage_bar(pct: f64) -> String {
-    let cells = 10usize;
+    let cells = 9usize;
     let filled = ((pct / 100.0).clamp(0.0, 1.0) * cells as f64).round() as usize;
     let mut s = String::from("[");
     for i in 0..cells {
@@ -102,6 +102,20 @@ fn usage_bar(pct: f64) -> String {
     }
     s.push(']');
     s
+}
+
+/// Width available to the NAME column: total minus fixed columns and spacing.
+fn name_width(cols: &[Col], total: u16) -> usize {
+    let fixed: u16 = cols
+        .iter()
+        .filter(|c| !matches!(c, Col::Name))
+        .map(|c| match col_constraint(*c) {
+            Constraint::Length(n) => n,
+            _ => 0,
+        })
+        .sum();
+    let spacing = cols.len() as u16 - 1; // column_spacing(1)
+    total.saturating_sub(fixed + spacing).max(10) as usize
 }
 
 fn truncate_ellipsis(s: &str, width: usize) -> String {
@@ -169,6 +183,7 @@ fn draw_rows(app: &App, frame: &mut Frame, area: Rect, now: Instant) {
         return;
     }
     let cols = columns_for_width(area.width);
+    let name_w = name_width(&cols, area.width);
     let dir_total = app.tree.get(app.current).size.max(1);
     let header = Row::new(
         cols.iter()
@@ -199,7 +214,7 @@ fn draw_rows(app: &App, frame: &mut Frame, area: Rect, now: Instant) {
                         None => Cell::from(""),
                     },
                     Col::Size => Cell::from(human_bytes(node.size)),
-                    Col::Bar => Cell::from(format!("{} {:>2.0}%", usage_bar(pct), pct)),
+                    Col::Bar => Cell::from(format!("{} {:>3.0}%", usage_bar(pct), pct)),
                     Col::Name => {
                         let mut label = node.name.to_string_lossy().into_owned();
                         if node.is_dir {
@@ -208,8 +223,7 @@ fn draw_rows(app: &App, frame: &mut Frame, area: Rect, now: Instant) {
                         if node.denied {
                             label.push_str(" [denied]");
                         }
-                        let w = area.width.saturating_sub(40).max(10) as usize;
-                        Cell::from(truncate_ellipsis(&label, w)).style(glow_style(glow))
+                        Cell::from(truncate_ellipsis(&label, name_w)).style(glow_style(glow))
                     }
                 })
                 .collect();
@@ -360,6 +374,21 @@ mod tests {
         assert!(!text.contains("LAST 30s"));
         assert!(!text.contains("RATE"));
         assert!(text.contains("SIZE"));
+    }
+
+    #[test]
+    fn active_row_renders_rate_spark_and_full_bar() {
+        let mut app = demo_app();
+        let now = Instant::now();
+        // Make "file.txt" the only sized entry => 100% of the dir, and active.
+        let f = app.tree.lookup(Path::new("/r/file.txt")).unwrap();
+        app.activity.record(f, 2_000_000, now);
+        let mut term = Terminal::new(TestBackend::new(64, 12)).unwrap();
+        term.draw(|fr| draw(&app, fr, now)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        assert!(text.contains("+")); // signed rate visible
+        assert!(text.contains("█")); // bar and/or spark filled
+        assert!(text.contains("100%")); // full-width percent not clipped
     }
 
     #[test]
