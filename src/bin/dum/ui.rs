@@ -229,7 +229,9 @@ fn draw_rows(app: &App, frame: &mut Frame, area: Rect, now: Instant) {
                 .collect();
             let row = Row::new(cells);
             if i == app.selected {
-                row.style(Style::new().add_modifier(Modifier::REVERSED))
+                // Subtle background + bold: highlights the row without inverting
+                // the usage bar or washing out the glow colors.
+                row.style(Style::new().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
             } else {
                 row
             }
