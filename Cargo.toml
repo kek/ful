@@ -2,7 +2,7 @@
 name = "ful"
 version = "0.1.0"
 edition = "2021"
-description = "TUI disk usage monitor (ful) and live disk usage explorer (dum)"
+description = "disk dashboard (ful) and disk usage monitor (dum)"
 license = "MIT"
 
 [lib]
