@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::format::{human_bytes, human_rate};
+use ful::format::{human_bytes, human_rate};
 use crate::model::MountRow;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
