@@ -412,7 +412,9 @@ mod tests {
     #[test]
     fn narrow_title_drops_subtitle_before_path() {
         let text = render(&demo_app(), 40, 12);
+        // Clipping alone would also hide the subtitle; the path check below is
+        // what proves the fallback fired (clipped form would be " dum — disk usa").
         assert!(!text.contains("disk usage monitor"));
-        assert!(text.contains("dum — /r"));
+        assert!(text.contains("dum — /r"), "fallback form must include the path");
     }
 }
