@@ -89,6 +89,17 @@ pub fn bar_color(pct: f64) -> Color {
     }
 }
 
+/// The "…ful" word for the title, reacting to the worst real disk.
+pub fn ful_word(worst_pct: Option<f64>) -> &'static str {
+    match worst_pct {
+        Some(p) if p < 60.0 => "plentiful",
+        Some(p) if p < 85.0 => "watchful",
+        Some(p) if p < 95.0 => "stressful",
+        Some(_) => "dreadful",
+        None => "watchful",
+    }
+}
+
 /// Truncate to `width` chars, appending `…` when clipped.
 fn truncate_ellipsis(s: &str, width: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
@@ -310,5 +321,22 @@ mod tests {
         term.draw(|f| draw(&app, f)).unwrap();
         let text = buffer_text(term.backend().buffer());
         assert!(text.contains("No filesystems found"));
+    }
+
+    #[test]
+    fn ful_word_thresholds() {
+        assert_eq!(ful_word(Some(0.0)), "plentiful");
+        assert_eq!(ful_word(Some(59.9)), "plentiful");
+        assert_eq!(ful_word(Some(60.0)), "watchful");
+        assert_eq!(ful_word(Some(84.9)), "watchful");
+        assert_eq!(ful_word(Some(85.0)), "stressful");
+        assert_eq!(ful_word(Some(94.9)), "stressful");
+        assert_eq!(ful_word(Some(95.0)), "dreadful");
+        assert_eq!(ful_word(Some(100.0)), "dreadful");
+    }
+
+    #[test]
+    fn ful_word_falls_back_to_watchful() {
+        assert_eq!(ful_word(None), "watchful");
     }
 }
