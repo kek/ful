@@ -173,8 +173,14 @@ fn draw_title(app: &App, frame: &mut Frame, area: Rect) {
     let [l, r] =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(right.len() as u16 + 1)])
             .areas(area);
+    let worst = app.worst_real_pct();
+    // The word inherits the color the usage bar would have at that level.
+    let word_color = bar_color(worst.unwrap_or(0.0));
     frame.render_widget(
-        Paragraph::new(Line::from(Span::from(" ful — disk usage monitor").bold())),
+        Paragraph::new(Line::from(vec![
+            Span::from(" ful — as in ").bold(),
+            Span::styled(ful_word(worst), Style::new().fg(word_color).bold()),
+        ])),
         l,
     );
     frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), r);
@@ -338,5 +344,17 @@ mod tests {
     #[test]
     fn ful_word_falls_back_to_watchful() {
         assert_eq!(ful_word(None), "watchful");
+    }
+
+    #[test]
+    fn title_word_reacts_to_worst_disk() {
+        for (pct, word) in [(40.0, "plentiful"), (68.0, "watchful"), (92.0, "stressful"), (97.0, "dreadful")] {
+            let app = app_with_rows(vec![row("/", "disk3s1", pct)]);
+            let backend = TestBackend::new(80, 10);
+            let mut term = Terminal::new(backend).unwrap();
+            term.draw(|f| draw(&app, f)).unwrap();
+            let text = buffer_text(term.backend().buffer());
+            assert!(text.contains(&format!("ful — as in {word}")), "pct {pct}: expected {word}");
+        }
     }
 }
