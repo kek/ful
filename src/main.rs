@@ -1,6 +1,5 @@
 mod app;
 mod datasource;
-mod format;
 mod model;
 mod ui;
 
@@ -9,12 +8,6 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use crossterm::event::{self, Event, KeyEventKind};
-use crossterm::execute;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
 
 use app::{App, Config};
 use datasource::{DataSource, SysinfoSource};
@@ -27,36 +20,11 @@ struct Cli {
     interval: u64,
 }
 
-/// Restores the terminal on drop (and via the panic hook) so a crash never
-/// leaves the terminal in raw mode / the alternate screen.
-struct TerminalGuard;
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        let _ = restore_terminal();
-    }
-}
-
-fn restore_terminal() -> io::Result<()> {
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-    Ok(())
-}
-
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = restore_terminal();
-        default_hook(info);
-    }));
-
-    enable_raw_mode()?;
-    let _guard = TerminalGuard; // from here on, Drop restores the terminal on any exit
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+    ful::term::install_panic_hook();
+    let (mut terminal, _guard) = ful::term::init()?;
 
     let mut source = SysinfoSource::new();
     let mut app = App::new(Config {
