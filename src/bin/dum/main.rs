@@ -19,7 +19,7 @@ use scanner::ScanMsg;
 use watcher::WatchMsg;
 
 #[derive(Parser)]
-#[command(name = "dum", about = "Live-activity disk usage explorer")]
+#[command(name = "dum", about = "dum — disk usage monitor, live")]
 struct Cli {
     /// Directory to explore
     #[arg(default_value = ".")]

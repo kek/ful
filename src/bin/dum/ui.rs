@@ -163,12 +163,14 @@ fn draw_title(app: &App, frame: &mut Frame, area: Rect) {
         Layout::horizontal([Constraint::Min(0), Constraint::Length(right.len() as u16 + 1)])
             .areas(area);
     let path = app.tree.path_of(app.current);
-    frame.render_widget(
-        Paragraph::new(Line::from(
-            Span::from(format!(" dum — {}", path.display())).bold(),
-        )),
-        l,
-    );
+    let full = format!(" dum — disk usage monitor — {}", path.display());
+    // Drop the subtitle before letting the path get clipped.
+    let title = if full.chars().count() <= l.width as usize {
+        full
+    } else {
+        format!(" dum — {}", path.display())
+    };
+    frame.render_widget(Paragraph::new(Line::from(Span::from(title).bold())), l);
     frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), r);
 }
 
@@ -270,7 +272,7 @@ fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
 
 fn draw_help(frame: &mut Frame, area: Rect) {
     let lines = vec![
-        Line::from("dum — keybindings"),
+        Line::from("dum — disk usage monitor"),
         Line::from(""),
         Line::from("  ↑↓ / jk        move selection"),
         Line::from("  ⏎ / l / →      enter directory"),
@@ -398,6 +400,19 @@ mod tests {
         let mut app = demo_app();
         app.show_help = true;
         let text = render(&app, 80, 14);
-        assert!(text.contains("keybindings"));
+        assert!(text.contains("dum — disk usage monitor"));
+    }
+
+    #[test]
+    fn wide_title_shows_subtitle_and_path() {
+        let text = render(&demo_app(), 80, 12);
+        assert!(text.contains("dum — disk usage monitor — /r"));
+    }
+
+    #[test]
+    fn narrow_title_drops_subtitle_before_path() {
+        let text = render(&demo_app(), 40, 12);
+        assert!(!text.contains("disk usage monitor"));
+        assert!(text.contains("dum — /r"));
     }
 }
