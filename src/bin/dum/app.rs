@@ -69,6 +69,9 @@ impl App {
                 self.items_seen += entries.len() as u64;
                 for e in entries {
                     let child_path = path.join(&e.name);
+                    if self.tree.lookup(&child_path).is_some() {
+                        continue; // watcher inserted it mid-scan; don't double count
+                    }
                     self.tree.insert(dir_id, child_path, e.name, e.size, e.is_dir);
                 }
             }
@@ -319,6 +322,29 @@ mod tests {
         assert!(app.rescan_requested);
         app.on_key(KeyEvent::from(KeyCode::Char('q')));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn scan_does_not_reinsert_path_already_added_by_watcher() {
+        let mut app = App::new(Path::new("/r"), Instant::now());
+        app.apply_scan(ScanMsg::Dir {
+            path: PathBuf::from("/r"),
+            entries: vec![entry("a", 0, true)],
+            denied: false,
+        });
+        // Watcher observes a file created mid-scan and inserts it first.
+        app.apply_delta(changed("/r/a/new.bin", 500), Instant::now());
+        assert_eq!(app.tree.get(app.tree.root).size, 500);
+        // Scanner's listing of /r/a arrives later, still containing new.bin.
+        app.apply_scan(ScanMsg::Dir {
+            path: PathBuf::from("/r/a"),
+            entries: vec![entry("new.bin", 500, false)],
+            denied: false,
+        });
+        // No double count, no duplicate child.
+        assert_eq!(app.tree.get(app.tree.root).size, 500);
+        let a = app.tree.lookup(Path::new("/r/a")).unwrap();
+        assert_eq!(app.tree.get(a).children.len(), 1);
     }
 
     #[test]
