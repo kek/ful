@@ -83,6 +83,16 @@ impl App {
             .collect()
     }
 
+    /// Highest usage percentage among real (non-pseudo) filesystems,
+    /// regardless of the `show_all` toggle. `None` if there are none.
+    pub fn worst_real_pct(&self) -> Option<f64> {
+        self.all_rows
+            .iter()
+            .filter(|r| !is_pseudo_fs(&r.fs_type, r.total))
+            .map(|r| r.used_pct)
+            .fold(None, |acc: Option<f64>, p| Some(acc.map_or(p, |a| a.max(p))))
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
@@ -181,5 +191,27 @@ mod tests {
         assert!(app.show_help);
         app.on_key(KeyEvent::from(KeyCode::Char('q')));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn worst_real_pct_is_max_over_real_filesystems() {
+        let mut app = App::new(cfg());
+        app.tick(
+            vec![
+                sample("disk1", "apfs", 100, 60, 0, 0),  // 40% used
+                sample("disk2", "apfs", 100, 10, 0, 0),  // 90% used
+                sample("vfs", "devfs", 100, 0, 0, 0),    // pseudo, 100% — must be ignored
+            ],
+            Instant::now(),
+        );
+        assert_eq!(app.worst_real_pct(), Some(90.0));
+    }
+
+    #[test]
+    fn worst_real_pct_none_without_real_filesystems() {
+        let mut app = App::new(cfg());
+        assert_eq!(app.worst_real_pct(), None); // empty
+        app.tick(vec![sample("vfs", "devfs", 100, 0, 0, 0)], Instant::now());
+        assert_eq!(app.worst_real_pct(), None); // pseudo only
     }
 }
