@@ -40,8 +40,8 @@ impl ActivityMap {
         let dt = now.duration_since(a.last_update).as_secs_f64().max(0.05);
         a.rate = ALPHA * (delta as f64 / dt) + (1.0 - ALPHA) * a.rate;
         a.last_update = now;
-        // Zero any skipped buckets, then add into the current one.
-        let from = a.last_bucket + 1;
+        // Zero any skipped buckets (at most the whole ring), then add into the current one.
+        let from = (a.last_bucket + 1).max(bucket.saturating_sub(RING_BUCKETS as u64 - 1));
         for b in from..=bucket {
             a.ring[(b % RING_BUCKETS as u64) as usize] = 0;
         }
@@ -131,6 +131,18 @@ mod tests {
         assert_eq!(ring[RING_BUCKETS - 1], 50);
         assert_eq!(ring[RING_BUCKETS - 3], 300);
         assert_eq!(ring[RING_BUCKETS - 2], 0);
+    }
+
+    #[test]
+    fn huge_bucket_gap_zeroes_ring_and_stays_fast() {
+        let t0 = Instant::now();
+        let mut m = ActivityMap::new(t0);
+        m.record(1, 100, t0 + Duration::from_secs(1));
+        // Re-record after a very long idle gap; old bucket contents must be gone.
+        m.record(1, 7, t0 + Duration::from_secs(1_000_000));
+        let ring = m.sparkline(1).unwrap();
+        assert_eq!(ring[RING_BUCKETS - 1], 7);
+        assert_eq!(ring.iter().filter(|&&v| v != 0).count(), 1);
     }
 
     #[test]

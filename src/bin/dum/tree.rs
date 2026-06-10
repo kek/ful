@@ -86,6 +86,9 @@ impl Tree {
     /// Detach a subtree; returns the (negative) signed delta applied to ancestors.
     /// Arena slots are not reclaimed (acceptable for v1); the path index is purged.
     pub fn remove(&mut self, id: NodeId, path: &Path) -> i64 {
+        if id == self.root {
+            return 0; // never remove the root; the watched dir vanishing is handled upstream
+        }
         let size = self.nodes[id].size;
         if let Some(p) = self.nodes[id].parent {
             self.nodes[p].children.retain(|&c| c != id);
@@ -173,6 +176,16 @@ mod tests {
         assert_eq!(t.lookup(Path::new("/root/a")), None);
         assert_eq!(t.lookup(Path::new("/root/a/f")), None);
         assert!(t.get(t.root).children.is_empty());
+    }
+
+    #[test]
+    fn remove_root_is_a_guarded_noop() {
+        let mut t = tree();
+        t.insert(t.root, PathBuf::from("/root/f"), OsString::from("f"), 100, false);
+        let delta = t.remove(t.root, Path::new("/root"));
+        assert_eq!(delta, 0);
+        assert_eq!(t.lookup(Path::new("/root")), Some(t.root));
+        assert_eq!(t.get(t.root).size, 100);
     }
 
     #[test]
