@@ -5,7 +5,7 @@ Two terminal disk tools that go together:
 - **ful** — a live dashboard of your mounted filesystems: usage bars,
   used/free/total, and per-device I/O. *Which disk is in trouble?*
   Not an acronym — a suffix, as in watch**ful** (the title bar shifts to
-  plenti*ful*, watch*ful*, stress*ful*, or dread*ful* with your worst disk).
+  plenti*ful*, watch*ful*, woe*ful*, or dread*ful* with your worst disk).
 - **dum** — short for **d**isk **u**sage **m**onitor: an ncdu-style tree
   explorer that watches filesystem events and illuminates what's changing:
   directories receiving writes glow green with a live rate and sparkline,

@@ -94,7 +94,7 @@ pub fn ful_word(worst_pct: Option<f64>) -> &'static str {
     match worst_pct {
         Some(p) if p < 60.0 => "plentiful",
         Some(p) if p < 85.0 => "watchful",
-        Some(p) if p < 95.0 => "stressful",
+        Some(p) if p < 95.0 => "woeful",
         Some(_) => "dreadful",
         None => "watchful",
     }
@@ -339,8 +339,8 @@ mod tests {
         assert_eq!(ful_word(Some(59.9)), "plentiful");
         assert_eq!(ful_word(Some(60.0)), "watchful");
         assert_eq!(ful_word(Some(84.9)), "watchful");
-        assert_eq!(ful_word(Some(85.0)), "stressful");
-        assert_eq!(ful_word(Some(94.9)), "stressful");
+        assert_eq!(ful_word(Some(85.0)), "woeful");
+        assert_eq!(ful_word(Some(94.9)), "woeful");
         assert_eq!(ful_word(Some(95.0)), "dreadful");
         assert_eq!(ful_word(Some(100.0)), "dreadful");
     }
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn title_word_reacts_to_worst_disk() {
-        for (pct, word) in [(40.0, "plentiful"), (68.0, "watchful"), (92.0, "stressful"), (97.0, "dreadful")] {
+        for (pct, word) in [(40.0, "plentiful"), (68.0, "watchful"), (92.0, "woeful"), (97.0, "dreadful")] {
             let app = app_with_rows(vec![row("/", "disk3s1", pct)]);
             let backend = TestBackend::new(80, 10);
             let mut term = Terminal::new(backend).unwrap();

@@ -16,7 +16,7 @@ word — the app name is its suffix:
 
     plentiful     (worst disk < 60% used)
     watchful      (worst disk < 85% used)
-    stressful     (worst disk < 95% used)
+    woeful        (worst disk < 95% used)
     dreadful      (worst disk ≥ 95% used)
 
 The prefix ("stress", "watch", …) wears the state color; the trailing
