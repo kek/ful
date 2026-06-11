@@ -174,12 +174,16 @@ fn draw_title(app: &App, frame: &mut Frame, area: Rect) {
         Layout::horizontal([Constraint::Min(0), Constraint::Length(right.len() as u16 + 1)])
             .areas(area);
     let worst = app.worst_real_pct();
-    // The word inherits the color the usage bar would have at that level.
-    let word_color = bar_color(worst.unwrap_or(0.0));
+    let word = ful_word(worst);
+    // The headline is the word itself; its prefix wears the color the usage
+    // bar would have at that level, and the trailing "ful" — the app name —
+    // is bold so it pops out of the word.
+    let prefix = word.strip_suffix("ful").expect("ful words end in ful");
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::from(" ful — as in ").bold(),
-            Span::styled(ful_word(worst), Style::new().fg(word_color).bold()),
+            Span::raw(" "),
+            Span::styled(prefix, Style::new().fg(bar_color(worst.unwrap_or(0.0)))),
+            Span::from("ful").bold(),
         ])),
         l,
     );
@@ -354,7 +358,8 @@ mod tests {
             let mut term = Terminal::new(backend).unwrap();
             term.draw(|f| draw(&app, f)).unwrap();
             let text = buffer_text(term.backend().buffer());
-            assert!(text.contains(&format!("ful — as in {word}")), "pct {pct}: expected {word}");
+            assert!(text.contains(&format!(" {word}")), "pct {pct}: expected {word}");
+            assert!(!text.contains("as in"), "headline should be the word alone");
         }
     }
 }

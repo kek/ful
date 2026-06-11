@@ -11,20 +11,24 @@ Give both tools their name-explanation in the UI:
 
 ## ful — dynamic subtitle
 
-The title bar (currently ` ful — disk usage monitor`) becomes:
+The title bar (currently ` ful — disk usage monitor`) becomes just the
+word — the app name is its suffix:
 
-    ful — as in plentiful     (worst disk < 60% used)
-    ful — as in watchful      (worst disk < 85% used)
-    ful — as in stressful     (worst disk < 95% used)
-    ful — as in dreadful      (worst disk ≥ 95% used)
+    plentiful     (worst disk < 60% used)
+    watchful      (worst disk < 85% used)
+    stressful     (worst disk < 95% used)
+    dreadful      (worst disk ≥ 95% used)
+
+The prefix ("stress", "watch", …) wears the state color; the trailing
+"ful" is bold, so the app name pops out of the word.
 
 - **Worst disk** = max usage percentage across **non-pseudo** filesystems,
   regardless of whether the `a` toggle currently shows pseudo filesystems.
   Pseudo filesystems (devfs etc.) sit at 100% and would false-alarm.
 - If no real filesystems are present (degenerate case), fall back to
   `watchful`.
-- The "…ful" word is styled with the same color the usage bar uses at that
-  level, so `dreadful` reads red.
+- The word's prefix is styled with the same color the usage bar uses at
+  that level, so `dreadful` reads red.
 - Clap `about` changes from "TUI disk usage monitor" (that identity now
   belongs to dum) to: `live filesystem dashboard — ful, as in watchful`.
 
