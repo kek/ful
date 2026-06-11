@@ -94,7 +94,15 @@ impl Tree {
             self.nodes[p].children.retain(|&c| c != id);
             self.bubble(Some(p), -(size as i64));
         }
-        self.by_path.retain(|p, _| !p.starts_with(path));
+        // Purge the index by walking the detached subtree — O(subtree), never
+        // O(index). Descendant paths are rebuilt the same way insert built them.
+        let mut stack = vec![(id, path.to_path_buf())];
+        while let Some((nid, npath)) = stack.pop() {
+            self.by_path.remove(&npath);
+            for &c in &self.nodes[nid].children {
+                stack.push((c, npath.join(&self.nodes[c].name)));
+            }
+        }
         -(size as i64)
     }
 
@@ -186,6 +194,65 @@ mod tests {
         assert_eq!(delta, 0);
         assert_eq!(t.lookup(Path::new("/root")), Some(t.root));
         assert_eq!(t.get(t.root).size, 100);
+    }
+
+    #[test]
+    fn remove_does_not_purge_string_prefix_siblings() {
+        // "/root/ab" is a string prefix match for "/root/a" but not a child;
+        // the index purge must compare whole components.
+        let mut t = tree();
+        let a = t.insert(t.root, PathBuf::from("/root/a"), OsString::from("a"), 0, true);
+        t.insert(a, PathBuf::from("/root/a/f"), OsString::from("f"), 10, false);
+        let ab = t.insert(t.root, PathBuf::from("/root/ab"), OsString::from("ab"), 0, true);
+        t.insert(ab, PathBuf::from("/root/ab/g"), OsString::from("g"), 20, false);
+        t.remove(a, Path::new("/root/a"));
+        assert_eq!(t.lookup(Path::new("/root/a")), None);
+        assert_eq!(t.lookup(Path::new("/root/a/f")), None);
+        assert!(t.lookup(Path::new("/root/ab")).is_some());
+        assert!(t.lookup(Path::new("/root/ab/g")).is_some());
+        assert_eq!(t.get(t.root).size, 20);
+    }
+
+    #[test]
+    fn removal_cost_scales_with_subtree_not_whole_index() {
+        // Regression test for the live-watch hang: with N indexed paths, each
+        // remove must not scan the whole index, or a burst of removals under a
+        // big root (e.g. `dum ~` during a cache sweep) freezes the UI for hours.
+        const DIRS: usize = 1000;
+        const FILES_PER_DIR: usize = 200;
+        let mut t = tree();
+        let mut dirs = Vec::new();
+        for d in 0..DIRS {
+            let dpath = PathBuf::from(format!("/root/dir{d:04}"));
+            let id = t.insert(
+                t.root,
+                dpath.clone(),
+                OsString::from(format!("dir{d:04}")),
+                0,
+                true,
+            );
+            for f in 0..FILES_PER_DIR {
+                t.insert(
+                    id,
+                    dpath.join(format!("f{f:03}")),
+                    OsString::from(format!("f{f:03}")),
+                    1,
+                    false,
+                );
+            }
+            dirs.push((id, dpath));
+        }
+        let start = std::time::Instant::now();
+        for (id, dpath) in dirs {
+            t.remove(id, &dpath);
+        }
+        let elapsed = start.elapsed();
+        assert_eq!(t.get(t.root).size, 0);
+        assert!(t.get(t.root).children.is_empty());
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "removals took {elapsed:?}; index purge is scanning the whole index"
+        );
     }
 
     #[test]
