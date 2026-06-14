@@ -11,7 +11,7 @@ use ratatui::Frame;
 use ful::format::{human_bytes, human_rate};
 
 use crate::activity::RING_BUCKETS;
-use crate::app::App;
+use crate::app::{App, SortMode};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Col {
@@ -51,6 +51,24 @@ fn header_label(c: Col) -> &'static str {
         Col::Bar => "USAGE",
         Col::Name => "NAME",
     }
+}
+
+/// The column that `sort` orders by, when that column is on screen.
+fn sort_column(sort: SortMode) -> Col {
+    match sort {
+        SortMode::Size => Col::Size,
+        SortMode::Rate => Col::Rate,
+    }
+}
+
+/// Header text with a `▾` appended to the active sort column. The marker stays
+/// within each column's width (e.g. "SIZE▾" is 5 chars in a Length(5) column).
+fn header_text(c: Col, sort: SortMode) -> String {
+    let mut s = header_label(c).to_string();
+    if c == sort_column(sort) {
+        s.push('▾');
+    }
+    s
 }
 
 /// Style for a glow value: sign -> color, log-magnitude -> emphasis band.
@@ -175,7 +193,7 @@ fn draw_title(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_rows(app: &App, frame: &mut Frame, area: Rect, now: Instant) {
-    let kids = app.sorted_children(app.current);
+    let kids = app.sorted_children(app.current, now);
     if kids.is_empty() {
         let msg = if app.scanning { "scanning…" } else { "empty directory" };
         frame.render_widget(
@@ -189,7 +207,7 @@ fn draw_rows(app: &App, frame: &mut Frame, area: Rect, now: Instant) {
     let dir_total = app.tree.get(app.current).size.max(1);
     let header = Row::new(
         cols.iter()
-            .map(|c| Cell::from(header_label(*c)))
+            .map(|c| Cell::from(header_text(*c, app.sort)))
             .collect::<Vec<_>>(),
     )
     .style(Style::new().bold());
@@ -246,7 +264,11 @@ fn draw_rows(app: &App, frame: &mut Frame, area: Rect, now: Instant) {
 }
 
 fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
-    let left = " q quit  ? help  r rescan  ⏎ enter  u up";
+    let sort = match app.sort {
+        SortMode::Size => "size",
+        SortMode::Rate => "rate",
+    };
+    let left = format!(" q quit  ? help  r rescan  s sort:{sort}  ⏎ enter  u up");
     let right = if app.scanning {
         format!("scanning… {} items ", app.items_seen)
     } else if let Some((dirs, files, errors)) = app.done_stats {
@@ -277,6 +299,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("  ↑↓ / jk        move selection"),
         Line::from("  ⏎ / l / →      enter directory"),
         Line::from("  u / h / ← / ⌫  go up"),
+        Line::from("  s              sort by size / change rate"),
         Line::from("  r              rescan"),
         Line::from("  ?              toggle this help"),
         Line::from("  q / Esc        quit"),
@@ -393,6 +416,26 @@ mod tests {
         assert!(text.contains("+")); // signed rate visible
         assert!(text.contains("█")); // bar and/or spark filled
         assert!(text.contains("100%")); // full-width percent not clipped
+    }
+
+    #[test]
+    fn active_sort_column_marked_in_header() {
+        let mut app = demo_app();
+        // Default size sort marks the SIZE header.
+        assert!(render(&app, 80, 12).contains("SIZE▾"));
+        // Switching to rate sort marks RATE instead.
+        app.sort = crate::app::SortMode::Rate;
+        let text = render(&app, 80, 12);
+        assert!(text.contains("RATE▾"));
+        assert!(!text.contains("SIZE▾"));
+    }
+
+    #[test]
+    fn footer_shows_active_sort_mode() {
+        let mut app = demo_app();
+        assert!(render(&app, 80, 12).contains("sort:size"));
+        app.sort = crate::app::SortMode::Rate;
+        assert!(render(&app, 80, 12).contains("sort:rate"));
     }
 
     #[test]

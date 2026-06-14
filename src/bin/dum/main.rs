@@ -85,7 +85,7 @@ fn main() -> io::Result<()> {
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    app.on_key(key);
+                    app.on_key(key, now);
                 }
             }
         }

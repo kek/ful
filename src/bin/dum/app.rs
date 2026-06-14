@@ -1,5 +1,6 @@
 //! dum application state: applies scan/delta messages, handles navigation.
 
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -10,12 +11,31 @@ use crate::scanner::ScanMsg;
 use crate::tree::{NodeId, Tree};
 use crate::watcher::{DeltaKind, DeltaMsg};
 
+/// How `sorted_children` orders entries.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SortMode {
+    /// Largest first (ties by name) — the default.
+    Size,
+    /// Most live change first, by |bytes/sec|; idle entries fall back to size.
+    Rate,
+}
+
+impl SortMode {
+    fn toggled(self) -> Self {
+        match self {
+            SortMode::Size => SortMode::Rate,
+            SortMode::Rate => SortMode::Size,
+        }
+    }
+}
+
 pub struct App {
     pub tree: Tree,
     pub activity: ActivityMap,
     pub root_path: PathBuf,
     pub current: NodeId,
     pub selected: usize,
+    pub sort: SortMode,
     pub scanning: bool,
     pub watching: bool,
     pub watch_degraded: bool,
@@ -36,6 +56,7 @@ impl App {
             root_path: root.to_path_buf(),
             current,
             selected: 0,
+            sort: SortMode::Size,
             scanning: true,
             watching: true,
             watch_degraded: false,
@@ -135,14 +156,24 @@ impl App {
         }
     }
 
-    /// Children of `dir`, size descending, ties by name ascending.
-    pub fn sorted_children(&self, dir: NodeId) -> Vec<NodeId> {
+    /// Children of `dir` in the current sort order.
+    pub fn sorted_children(&self, dir: NodeId, now: Instant) -> Vec<NodeId> {
         let mut kids = self.tree.get(dir).children.clone();
-        kids.sort_by(|&a, &b| {
-            let (na, nb) = (self.tree.get(a), self.tree.get(b));
-            nb.size.cmp(&na.size).then_with(|| na.name.cmp(&nb.name))
-        });
+        match self.sort {
+            SortMode::Size => kids.sort_by(|&a, &b| self.cmp_size(a, b)),
+            SortMode::Rate => kids.sort_by(|&a, &b| {
+                let mag = |id| self.activity.glow(id, now).abs();
+                // Most live change first; idle ties fall back to size order.
+                mag(b).total_cmp(&mag(a)).then_with(|| self.cmp_size(a, b))
+            }),
+        }
         kids
+    }
+
+    /// Size descending, ties by name ascending.
+    fn cmp_size(&self, a: NodeId, b: NodeId) -> Ordering {
+        let (na, nb) = (self.tree.get(a), self.tree.get(b));
+        nb.size.cmp(&na.size).then_with(|| na.name.cmp(&nb.name))
     }
 
     fn clamp_selection(&mut self) {
@@ -154,12 +185,23 @@ impl App {
         }
     }
 
-    pub fn on_key(&mut self, key: KeyEvent) {
+    pub fn on_key(&mut self, key: KeyEvent, now: Instant) {
         match key.code {
             KeyCode::Esc if self.show_help => self.show_help = false,
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('r') => self.rescan_requested = true,
+            KeyCode::Char('s') => {
+                // Keep the cursor on the same entry across the reorder.
+                let anchor = self.sorted_children(self.current, now).get(self.selected).copied();
+                self.sort = self.sort.toggled();
+                if let Some(id) = anchor {
+                    let kids = self.sorted_children(self.current, now);
+                    if let Some(pos) = kids.iter().position(|&k| k == id) {
+                        self.selected = pos;
+                    }
+                }
+            }
             KeyCode::Down | KeyCode::Char('j') => {
                 let n = self.tree.get(self.current).children.len();
                 if n > 0 && self.selected + 1 < n {
@@ -170,7 +212,7 @@ impl App {
                 self.selected = self.selected.saturating_sub(1);
             }
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
-                let kids = self.sorted_children(self.current);
+                let kids = self.sorted_children(self.current, now);
                 if let Some(&id) = kids.get(self.selected) {
                     if self.tree.get(id).is_dir {
                         self.current = id;
@@ -295,32 +337,101 @@ mod tests {
     #[test]
     fn sorted_children_by_size_desc_then_name() {
         let app = scanned_app();
-        let kids = app.sorted_children(app.tree.root);
+        let kids = app.sorted_children(app.tree.root, Instant::now());
         assert_eq!(app.tree.get(kids[0]).name, "a"); // 100
         assert_eq!(app.tree.get(kids[1]).name, "g"); // 50
     }
 
     #[test]
+    fn sort_defaults_to_size() {
+        assert_eq!(scanned_app().sort, SortMode::Size);
+    }
+
+    #[test]
+    fn s_key_toggles_sort_mode() {
+        let mut app = scanned_app();
+        let now = Instant::now();
+        app.on_key(KeyEvent::from(KeyCode::Char('s')), now);
+        assert_eq!(app.sort, SortMode::Rate);
+        app.on_key(KeyEvent::from(KeyCode::Char('s')), now);
+        assert_eq!(app.sort, SortMode::Size);
+    }
+
+    #[test]
+    fn rate_sort_orders_by_activity_magnitude() {
+        let mut app = scanned_app();
+        let now = Instant::now();
+        // "g" (smaller) is changing fast; "a" (bigger) is idle.
+        let g = app.tree.lookup(Path::new("/r/g")).unwrap();
+        app.activity.record(g, 5_000_000, now);
+        app.sort = SortMode::Rate;
+        let kids = app.sorted_children(app.tree.root, now);
+        assert_eq!(app.tree.get(kids[0]).name, "g"); // most active first
+        assert_eq!(app.tree.get(kids[1]).name, "a");
+    }
+
+    #[test]
+    fn rate_sort_ranks_shrinking_as_high_as_growing() {
+        let mut app = scanned_app();
+        let now = Instant::now();
+        // "g" shrinking hard, "a" growing gently => |rate| puts "g" on top.
+        let g = app.tree.lookup(Path::new("/r/g")).unwrap();
+        let a = app.tree.lookup(Path::new("/r/a")).unwrap();
+        app.activity.record(g, -9_000_000, now);
+        app.activity.record(a, 100_000, now);
+        app.sort = SortMode::Rate;
+        let kids = app.sorted_children(app.tree.root, now);
+        assert_eq!(app.tree.get(kids[0]).name, "g");
+    }
+
+    #[test]
+    fn rate_sort_falls_back_to_size_when_idle() {
+        let mut app = scanned_app();
+        app.sort = SortMode::Rate;
+        // No activity recorded: order matches size sort.
+        let kids = app.sorted_children(app.tree.root, Instant::now());
+        assert_eq!(app.tree.get(kids[0]).name, "a"); // 100
+        assert_eq!(app.tree.get(kids[1]).name, "g"); // 50
+    }
+
+    #[test]
+    fn toggling_sort_keeps_the_selected_node_under_the_cursor() {
+        let mut app = scanned_app();
+        let now = Instant::now();
+        // Size order is [a, g]; select "g" at index 1.
+        app.selected = 1;
+        let g = app.tree.lookup(Path::new("/r/g")).unwrap();
+        // Make "g" the most active so rate order becomes [g, a].
+        app.activity.record(g, 5_000_000, now);
+        app.on_key(KeyEvent::from(KeyCode::Char('s')), now);
+        // Cursor should follow "g" to its new index 0, not stay at 1 (= "a").
+        let kids = app.sorted_children(app.current, now);
+        assert_eq!(kids[app.selected], g);
+    }
+
+    #[test]
     fn navigation_descend_and_up() {
         let mut app = scanned_app();
-        app.on_key(KeyEvent::from(KeyCode::Enter)); // into "a" (largest, selected=0)
+        let now = Instant::now();
+        app.on_key(KeyEvent::from(KeyCode::Enter), now); // into "a" (largest, selected=0)
         let a = app.tree.lookup(Path::new("/r/a")).unwrap();
         assert_eq!(app.current, a);
-        app.on_key(KeyEvent::from(KeyCode::Char('h'))); // back up
+        app.on_key(KeyEvent::from(KeyCode::Char('h')), now); // back up
         assert_eq!(app.current, app.tree.root);
     }
 
     #[test]
     fn quit_help_and_rescan_keys() {
         let mut app = scanned_app();
-        app.on_key(KeyEvent::from(KeyCode::Char('?')));
+        let now = Instant::now();
+        app.on_key(KeyEvent::from(KeyCode::Char('?')), now);
         assert!(app.show_help);
-        app.on_key(KeyEvent::from(KeyCode::Esc)); // closes help first
+        app.on_key(KeyEvent::from(KeyCode::Esc), now); // closes help first
         assert!(!app.show_help);
         assert!(!app.should_quit);
-        app.on_key(KeyEvent::from(KeyCode::Char('r')));
+        app.on_key(KeyEvent::from(KeyCode::Char('r')), now);
         assert!(app.rescan_requested);
-        app.on_key(KeyEvent::from(KeyCode::Char('q')));
+        app.on_key(KeyEvent::from(KeyCode::Char('q')), now);
         assert!(app.should_quit);
     }
 
