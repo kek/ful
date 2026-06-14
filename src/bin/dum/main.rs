@@ -97,5 +97,10 @@ fn main() -> io::Result<()> {
         }
     }
 
-    Ok(())
+    // Quitting. Restore the terminal, then exit *without* running destructors:
+    // freeing a multi-million-node tree (plus any unprocessed scan backlog) can
+    // take well over a second, which would otherwise freeze the final frame on
+    // screen while the OS is about to reclaim every page instantly anyway.
+    ful::term::restore_terminal()?;
+    std::process::exit(0);
 }
