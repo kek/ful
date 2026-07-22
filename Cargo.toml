@@ -23,6 +23,7 @@ crossterm = "0.28"
 sysinfo = { version = "0.33", default-features = false, features = ["disk"] }
 clap = { version = "4", features = ["derive"] }
 notify = "8"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
