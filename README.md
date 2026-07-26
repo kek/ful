@@ -35,10 +35,12 @@ dum is read-only: it never modifies, moves, or deletes anything.
 
 ## Notes
 
-- Sizes are allocated (on-disk) bytes, like `du`.
+- Sizes are allocated (on-disk) bytes, like `du`. Hard-linked files count
+  once per scan (by `(device, inode)`), so multiply-linked inodes don't
+  inflate directory totals — again matching `du`.
 - macOS reports I/O per physical device; if `sysinfo` surfaces no per-disk
   counters, ful's READ/s and WRITE/s columns show `—`.
-- dum's live layer uses FSEvents on macOS (via `notify`). Hardlinks are
-  counted naively. Linux/Windows are untested in v1.
+- dum's live layer uses FSEvents on macOS (via `notify`). Linux/Windows are
+  untested in v1.
 - If event watching fails or overflows, dum keeps working as a plain
   explorer and shows "degraded" — press `r` to rescan.
