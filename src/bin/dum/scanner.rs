@@ -1,5 +1,6 @@
 //! Initial filesystem walk: streams directory listings to the UI thread.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs::Metadata;
 use std::path::PathBuf;
@@ -29,11 +30,31 @@ pub fn allocated_size(md: &Metadata) -> u64 {
     md.len()
 }
 
+/// Allocated size of a file, charging a multiply-linked inode only the first
+/// time it's seen in this scan — matching `du`, which counts each inode once.
+/// `seen` holds the `(dev, ino)` of hard-linked files already counted.
+#[cfg(unix)]
+fn counted_size(md: &Metadata, seen: &mut HashSet<(u64, u64)>) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    // Only nlink > 1 can appear twice, so single-linked files skip the set.
+    if md.nlink() > 1 && !seen.insert((md.dev(), md.ino())) {
+        return 0; // an inode we've already charged this scan
+    }
+    allocated_size(md)
+}
+
+#[cfg(not(unix))]
+fn counted_size(md: &Metadata, _seen: &mut HashSet<(u64, u64)>) -> u64 {
+    allocated_size(md)
+}
+
 /// Walk `root` depth-first, streaming one `Dir` message per directory,
 /// then `Done`. Symlinks are not followed. Send errors mean the UI is
 /// gone — just stop.
 pub fn scan(root: PathBuf, tx: Sender<ScanMsg>) {
     let (mut dirs, mut files, mut errors) = (0u64, 0u64, 0u64);
+    // Hard-linked inodes already counted, so each is charged once per scan.
+    let mut seen: HashSet<(u64, u64)> = HashSet::new();
     let mut stack = vec![root];
     while let Some(dir) = stack.pop() {
         let rd = match std::fs::read_dir(&dir) {
@@ -61,7 +82,7 @@ pub fn scan(root: PathBuf, tx: Sender<ScanMsg>) {
             }
             entries.push(ScanEntry {
                 name: ent.file_name(),
-                size: if is_dir { 0 } else { allocated_size(&md) },
+                size: if is_dir { 0 } else { counted_size(&md, &mut seen) },
                 is_dir,
             });
         }
@@ -128,6 +149,48 @@ mod tests {
         assert!(small.size >= 5); // allocated >= content length
         assert!(sub.is_dir);
         assert_eq!(sub.size, 0); // dirs start at 0; children roll up in the tree
+    }
+
+    /// Sum the recorded size of every file entry across all `Dir` messages —
+    /// the same rollup the tree performs, so this is what the UI would report.
+    fn total_file_bytes(msgs: &[ScanMsg]) -> u64 {
+        msgs.iter()
+            .filter_map(|m| match m {
+                ScanMsg::Dir { entries, .. } => {
+                    Some(entries.iter().map(|e| e.size).sum::<u64>())
+                }
+                _ => None,
+            })
+            .sum()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hard_link_counts_the_inode_once() {
+        // A file and a hard link to it share one inode; `du` charges its blocks
+        // once, so the scan total must equal a single copy — not double.
+        let td = tempfile::tempdir().unwrap();
+        let orig = td.path().join("orig.bin");
+        fs::write(&orig, vec![0u8; 100_000]).unwrap();
+        fs::hard_link(&orig, td.path().join("link.bin")).unwrap();
+
+        let msgs = run_scan(td.path().to_path_buf());
+        let one_copy = allocated_size(&fs::metadata(&orig).unwrap());
+        assert_eq!(total_file_bytes(&msgs), one_copy);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn distinct_files_of_equal_size_are_both_counted() {
+        // Two independent inodes that happen to be the same size must both
+        // count — the dedup keys on (dev, ino), never on size.
+        let td = tempfile::tempdir().unwrap();
+        fs::write(td.path().join("a.bin"), vec![0u8; 100_000]).unwrap();
+        fs::write(td.path().join("b.bin"), vec![7u8; 100_000]).unwrap();
+
+        let msgs = run_scan(td.path().to_path_buf());
+        let one_copy = allocated_size(&fs::metadata(td.path().join("a.bin")).unwrap());
+        assert_eq!(total_file_bytes(&msgs), one_copy * 2);
     }
 
     #[cfg(unix)]
