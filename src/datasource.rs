@@ -12,6 +12,10 @@ pub struct DiskSample {
     pub fs_type: String,
     pub total: u64,
     pub available: u64,
+    /// Space used by *this volume alone*, matching `df`'s per-volume "Used".
+    /// On a shared APFS container this is far smaller than `total - available`,
+    /// which would count every sibling volume in the container too.
+    pub used: u64,
     pub read_bytes: u64,
     pub written_bytes: u64,
 }
@@ -43,12 +47,16 @@ impl DataSource for SysinfoSource {
             .iter()
             .map(|d| {
                 let usage = d.usage();
+                let mount = d.mount_point();
+                let total = d.total_space();
+                let available = available_space(mount, d.available_space());
                 DiskSample {
-                    mount: d.mount_point().to_string_lossy().into_owned(),
+                    mount: mount.to_string_lossy().into_owned(),
                     device: short_device(&d.name().to_string_lossy()),
                     fs_type: d.file_system().to_string_lossy().into_owned(),
-                    total: d.total_space(),
-                    available: available_space(d.mount_point(), d.available_space()),
+                    total,
+                    available,
+                    used: used_space(mount, total.saturating_sub(available)),
                     read_bytes: usage.total_read_bytes,
                     written_bytes: usage.total_written_bytes,
                 }
@@ -114,6 +122,113 @@ fn statvfs_available(mount: &Path) -> Option<u64> {
             None
         }
     }
+}
+
+/// Space used by the volume mounted at `mount`, matching `df`'s per-volume
+/// "Used" column, falling back to `fallback` (usually `total - available`) if
+/// the platform query fails.
+///
+/// The naive `total - available` overcounts on shared containers: on macOS an
+/// APFS *container* holds several volumes that pool their free space, so
+/// `total` is the whole container and `total - available` charges this volume
+/// for space its siblings occupy (e.g. reading ~93% for a volume `df` shows at
+/// 15%). macOS exposes the volume's own footprint via `getattrlist`'s
+/// `ATTR_VOL_SPACEUSED`; other Unixes have one filesystem per device, so the
+/// volume's `statvfs` used-block count (`f_blocks - f_bfree`) is already
+/// per-volume and matches `df` directly.
+fn used_space(mount: &Path, fallback: u64) -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(used) = volume_space_used(mount) {
+            return used;
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(used) = statvfs_used(mount) {
+            return used;
+        }
+    }
+    let _ = mount;
+    fallback
+}
+
+/// Used bytes from `statvfs` fields the `df` way: total blocks minus free
+/// blocks, times the fundamental block size. Pure so the arithmetic is testable
+/// (`f_frsize` is the block-count unit; fall back to `f_bsize` when a platform
+/// reports it as 0). Saturating, since the product can exceed `u64` in theory.
+#[cfg(unix)]
+#[cfg_attr(target_os = "macos", allow(dead_code))] // used only off macOS; tested everywhere
+fn used_bytes_from_statvfs(frsize: u64, bsize: u64, blocks: u64, bfree: u64) -> u64 {
+    let unit = if frsize != 0 { frsize } else { bsize };
+    blocks.saturating_sub(bfree).saturating_mul(unit)
+}
+
+/// Query `statvfs(2)` for `mount` and return the volume's used bytes, or `None`
+/// if the syscall fails. Only meaningful where each filesystem owns its device;
+/// on shared-container filesystems (macOS APFS) these fields are container-wide,
+/// which is why macOS uses `volume_space_used` instead.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn statvfs_used(mount: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let cpath = CString::new(mount.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `cpath` is a valid NUL-terminated C string that outlives the call;
+    // `statvfs` fills the zeroed struct and returns 0 on success, negative on error.
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(cpath.as_ptr(), &mut stat) == 0 {
+            Some(used_bytes_from_statvfs(
+                stat.f_frsize as u64,
+                stat.f_bsize as u64,
+                stat.f_blocks as u64,
+                stat.f_bfree as u64,
+            ))
+        } else {
+            None
+        }
+    }
+}
+
+/// Bytes used by *this* APFS volume, via `getattrlist`'s `ATTR_VOL_SPACEUSED`.
+///
+/// This is the per-volume figure `df` prints as "Used" — unlike `statvfs`'s
+/// `f_blocks`/`f_bfree`, which report the shared container and so read the same
+/// (whole-container) usage for every volume in it. Returns `None` if the
+/// syscall fails or the path can't be represented as a C string.
+#[cfg(target_os = "macos")]
+fn volume_space_used(mount: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let cpath = CString::new(mount.as_os_str().as_bytes()).ok()?;
+
+    let mut list: libc::attrlist = unsafe { std::mem::zeroed() };
+    list.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+    list.volattr = libc::ATTR_VOL_INFO | libc::ATTR_VOL_SPACEUSED;
+
+    // Reply layout for a single off_t attribute: a leading u32 length followed
+    // by the 8-byte value, packed on a 4-byte boundary (hence the byte read
+    // rather than a typed struct deref, which would assume 8-byte alignment).
+    let mut buf = [0u8; 16];
+
+    // SAFETY: `cpath` outlives the call; `list` and `buf` are valid, sized
+    // exactly as told to `getattrlist`, which returns 0 on success.
+    let rc = unsafe {
+        libc::getattrlist(
+            cpath.as_ptr(),
+            &mut list as *mut libc::attrlist as *mut libc::c_void,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            buf.len() as libc::size_t,
+            0,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    let used = i64::from_ne_bytes(buf[4..12].try_into().ok()?);
+    (used >= 0).then_some(used as u64)
 }
 
 /// Deterministic source for tests: returns each batch in order, then empty.
@@ -189,8 +304,44 @@ mod tests {
             fs_type: "apfs".to_string(),
             total: 100,
             available: 50,
+            used: 50,
             read_bytes: 0,
             written_bytes: 0,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn used_bytes_from_statvfs_is_used_blocks_times_frsize() {
+        // df-style: (total blocks - free blocks) * fundamental block size.
+        // e.g. a 1 GiB volume with 256 MiB free at 4 KiB blocks -> 768 MiB used.
+        let frsize = 4096;
+        let blocks = 262_144; // 1 GiB / 4 KiB
+        let bfree = 65_536; // 256 MiB / 4 KiB
+        assert_eq!(
+            used_bytes_from_statvfs(frsize, 1_048_576, blocks, bfree),
+            805_306_368 // 768 MiB
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn used_bytes_from_statvfs_falls_back_to_bsize_when_frsize_zero() {
+        assert_eq!(used_bytes_from_statvfs(0, 4096, 10, 3), 28_672); // 7 * 4096
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn used_bytes_from_statvfs_saturates_instead_of_overflowing() {
+        assert_eq!(used_bytes_from_statvfs(u64::MAX, 0, u64::MAX, 0), u64::MAX);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn volume_space_used_reports_positive_space_for_root() {
+        // The root volume always exists and holds the OS; this guards the
+        // getattrlist FFI plumbing (attrlist setup, buffer decode, return check).
+        let used = volume_space_used(std::path::Path::new("/"));
+        assert!(matches!(used, Some(n) if n > 0), "got {used:?}");
     }
 }

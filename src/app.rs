@@ -119,6 +119,7 @@ mod tests {
             fs_type: fs.to_string(),
             total,
             available: avail,
+            used: total.saturating_sub(avail),
             read_bytes: rd,
             written_bytes: wr,
         }
