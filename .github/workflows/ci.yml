@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Both platforms matter, not just the one the author develops on: the
+  # per-volume Used feature has a macOS branch (getattrlist) and a non-macOS
+  # unix branch (statvfs) that no local build ever compiled.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      # The GitHub-hosted images ship rustup with cargo, clippy and rustfmt, so
+      # there is no toolchain action to install or pin here.
+      - name: Toolchain versions
+        run: |
+          rustc --version
+          cargo clippy --version
+      - name: Tests
+        run: cargo test --all-targets
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  # Advisory, deliberately not a gate. rustfmt disagrees with trunk in 51 places
+  # across 9 files, and every one of them is rustfmt expanding compact,
+  # hand-arranged code (one-line struct literals, `let ... else { return }`,
+  # short call chains) rather than a formatting defect. Gating would mean
+  # committing a ~500-line reformat that makes the code worse, and no
+  # rustfmt.toml reproduces the existing style. So this job records the diff in
+  # the run summary and leaves adopting rustfmt as a separate, deliberate call.
+  # To make it a gate later, drop the `if` and run `cargo fmt --check` plainly.
+  format:
+    name: rustfmt (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: |
+          # --color=never because rustfmt colours its diff even down a pipe, and
+          # the escapes render as noise in the step summary.
+          if cargo fmt --check -- --color=never > "$RUNNER_TEMP/fmt.diff" 2>&1; then
+            echo 'rustfmt reports no differences.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo '### rustfmt differences'
+              echo
+              echo '_Advisory: this job does not fail the build. See the comment in `.github/workflows/ci.yml`._'
+              echo
+              echo '<details><summary>diff</summary>'
+              echo
+              echo '```diff'
+              cat "$RUNNER_TEMP/fmt.diff"
+              echo '```'
+              echo
+              echo '</details>'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo '::notice title=rustfmt::Formatting differences found; see the job summary. Not gating.'
+          fi
