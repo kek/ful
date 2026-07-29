@@ -344,4 +344,14 @@ mod tests {
         let used = volume_space_used(std::path::Path::new("/"));
         assert!(matches!(used, Some(n) if n > 0), "got {used:?}");
     }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn statvfs_used_reports_positive_space_for_root() {
+        // The macOS smoke test above had no counterpart off macOS, so until CI
+        // grew a Linux job this path was compiled by nothing and run by nothing.
+        // Same guarantee, same guard: root exists and holds the OS.
+        let used = statvfs_used(std::path::Path::new("/"));
+        assert!(matches!(used, Some(n) if n > 0), "got {used:?}");
+    }
 }
