@@ -1,5 +1,7 @@
 # ful & dum
 
+[![CI](https://github.com/kek/ful/actions/workflows/ci.yml/badge.svg)](https://github.com/kek/ful/actions/workflows/ci.yml)
+
 Two terminal disk tools that go together:
 
 - **ful** — a live dashboard of your mounted filesystems: usage bars,
@@ -13,7 +15,7 @@ Two terminal disk tools that go together:
 
 Install both with one command:
 
-    cargo install ful
+    cargo install --git https://github.com/kek/ful
 
 ## ful
 
@@ -28,8 +30,8 @@ Keys: `q`/Esc quit · `?` help · `a` toggle pseudo filesystems.
     dum ~/src            # explore a specific path
     dum --no-watch PATH  # plain explorer, no live updates
 
-Keys: arrows/`hjkl` move · `⏎` enter · `u`/`⌫` up · `r` rescan ·
-`?` help · `q`/Esc quit.
+Keys: arrows/`hjkl` move · `⏎` enter · `u`/`⌫` up ·
+`s` sort (size/rate) · `r` rescan · `?` help · `q`/Esc quit.
 
 dum is read-only: it never modifies, moves, or deletes anything.
 
@@ -40,7 +42,8 @@ dum is read-only: it never modifies, moves, or deletes anything.
   inflate directory totals — again matching `du`.
 - macOS reports I/O per physical device; if `sysinfo` surfaces no per-disk
   counters, ful's READ/s and WRITE/s columns show `—`.
-- dum's live layer uses FSEvents on macOS (via `notify`). Linux/Windows are
-  untested in v1.
+- dum's live layer goes through `notify`, so FSEvents on macOS and inotify on
+  Linux. CI runs the whole suite on both, watcher test included. Windows is
+  neither built nor tested.
 - If event watching fails or overflows, dum keeps working as a plain
   explorer and shows "degraded" — press `r` to rescan.
