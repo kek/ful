@@ -24,7 +24,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The GitHub-hosted images ship rustup with cargo, clippy and rustfmt, so
       # there is no toolchain action to install or pin here.
       - name: Toolchain versions
@@ -48,7 +48,7 @@ jobs:
     name: rustfmt (advisory)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check formatting
         run: |
           # --color=never because rustfmt colours its diff even down a pipe, and
