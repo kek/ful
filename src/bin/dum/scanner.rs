@@ -196,6 +196,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn denied_directory_is_flagged_and_counted() {
+        // Fails as root, which ignores mode 0o000 and reads the directory anyway:
+        // nothing is denied and `errors` stays 0. That's the test being unrunnable
+        // as root, not a scanner bug — CI's runners are non-root and pass. So if
+        // this fails, check `id -u` first: a plain `docker run` is root by default
+        // (`--user "$(id -u)"` fixes it).
         use std::os::unix::fs::PermissionsExt;
         let td = fixture();
         let locked = td.path().join("locked");
