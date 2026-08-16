@@ -64,6 +64,9 @@ pub struct App {
     pub show_help: bool,
     pub should_quit: bool,
     pub rescan_requested: bool,
+    /// Directories that appeared without a scan (renamed or moved into the
+    /// tree): the main loop spawns a subtree scan for each.
+    pub subscan_requested: Vec<PathBuf>,
     /// Set by `d`: the entry awaiting y/N confirmation in the modal.
     pub pending_delete: Option<DeleteTarget>,
     /// Set by `y`: a confirmed delete for the main loop to perform.
@@ -90,6 +93,7 @@ impl App {
             show_help: false,
             should_quit: false,
             rescan_requested: false,
+            subscan_requested: Vec::new(),
             pending_delete: None,
             delete_confirmed: None,
             last_error: None,
@@ -107,6 +111,7 @@ impl App {
         self.scanning = true;
         self.items_seen = 0;
         self.done_stats = None;
+        self.subscan_requested.clear();
     }
 
     pub fn apply_scan(&mut self, msg: ScanMsg) {
@@ -155,6 +160,11 @@ impl App {
                             self.tree
                                 .insert(parent, msg.path.clone(), name, new_size, msg.is_dir);
                         self.record_chain(id, new_size as i64, now);
+                        if msg.is_dir {
+                            // A dir appearing without per-child events (renamed or
+                            // moved in) has unscanned contents; ask for a subscan.
+                            self.subscan_requested.push(msg.path);
+                        }
                         return;
                     }
                 };
@@ -507,6 +517,67 @@ mod tests {
         assert!(app.rescan_requested);
         app.on_key(KeyEvent::from(KeyCode::Char('q')), now);
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn changed_delta_for_unknown_dir_requests_subtree_scan() {
+        let mut app = scanned_app();
+        app.apply_delta(
+            DeltaMsg {
+                path: PathBuf::from("/r/moved"),
+                kind: DeltaKind::Changed,
+                new_size: Some(0),
+                is_dir: true,
+            },
+            Instant::now(),
+        );
+        assert!(app.tree.lookup(Path::new("/r/moved")).is_some());
+        assert_eq!(app.subscan_requested, vec![PathBuf::from("/r/moved")]);
+    }
+
+    #[test]
+    fn changed_delta_for_unknown_file_requests_no_scan() {
+        let mut app = scanned_app();
+        app.apply_delta(changed("/r/new.bin", 500), Instant::now());
+        assert!(app.subscan_requested.is_empty());
+    }
+
+    #[test]
+    fn renamed_dir_subtree_is_restored_by_the_subscan() {
+        // A rename of a/ -> b/ arrives as Removed(a) + Changed(b, dir); the
+        // requested subscan must rebuild b's contents and rollups.
+        let mut app = scanned_app();
+        let now = Instant::now();
+        app.apply_delta(
+            DeltaMsg {
+                path: PathBuf::from("/r/a"),
+                kind: DeltaKind::Removed,
+                new_size: None,
+                is_dir: false,
+            },
+            now,
+        );
+        app.apply_delta(
+            DeltaMsg {
+                path: PathBuf::from("/r/b"),
+                kind: DeltaKind::Changed,
+                new_size: Some(0),
+                is_dir: true,
+            },
+            now,
+        );
+        assert_eq!(app.subscan_requested, vec![PathBuf::from("/r/b")]);
+        // Main drains the request and streams the subtree back in.
+        app.subscan_requested.clear();
+        app.apply_scan(ScanMsg::Dir {
+            path: PathBuf::from("/r/b"),
+            entries: vec![entry("f1", 100, false)],
+            denied: false,
+        });
+        assert!(app.tree.lookup(Path::new("/r/b/f1")).is_some());
+        let b = app.tree.lookup(Path::new("/r/b")).unwrap();
+        assert_eq!(app.tree.get(b).size, 100);
+        assert_eq!(app.tree.get(app.tree.root).size, 150); // f1 (100) + g (50)
     }
 
     #[test]

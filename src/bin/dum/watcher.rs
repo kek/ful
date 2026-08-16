@@ -136,6 +136,36 @@ mod tests {
     }
 
     #[test]
+    fn dir_rename_reports_removed_old_and_changed_new() {
+        // The rename contract the app's subtree-rescan relies on: the OS emits
+        // no events for the children, only the two endpoints of the rename.
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().canonicalize().unwrap();
+        fs::create_dir(root.join("old")).unwrap();
+        fs::write(root.join("old/data.bin"), vec![0u8; 150_000]).unwrap();
+        let (tx, rx) = mpsc::channel();
+        {
+            let root = root.clone();
+            std::thread::spawn(move || watch(root, tx));
+        }
+        std::thread::sleep(Duration::from_millis(500)); // FSEvents warmup
+
+        fs::rename(root.join("old"), root.join("new")).unwrap();
+
+        let new = root.join("new");
+        let d = wait_for(&rx, 10, |d| {
+            d.path == new && matches!(d.kind, DeltaKind::Changed)
+        })
+        .expect("expected Changed for rename target");
+        assert!(d.is_dir);
+        let old = root.join("old");
+        wait_for(&rx, 10, |d| {
+            d.path == old && matches!(d.kind, DeltaKind::Removed)
+        })
+        .expect("expected Removed for rename source");
+    }
+
+    #[test]
     fn watcher_reports_create_and_remove() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().canonicalize().unwrap();

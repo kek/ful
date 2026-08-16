@@ -66,11 +66,27 @@ fn main() -> io::Result<()> {
 
     let mut app = App::new(&root, Instant::now());
     app.watching = !cli.no_watch;
+    // Subtree scans for dirs that appear without per-child events (renames,
+    // moves into the tree). Their Done messages are dropped: only the main
+    // scan may drive `scanning` and the footer stats.
+    let mut subscans: Vec<Receiver<ScanMsg>> = Vec::new();
 
     while !app.should_quit {
         let now = Instant::now();
         for msg in scan_rx.try_iter().take(MAX_MSGS_PER_FRAME) {
             app.apply_scan(msg);
+        }
+        subscans.retain(|rx| {
+            for msg in rx.try_iter().take(MAX_MSGS_PER_FRAME) {
+                match msg {
+                    ScanMsg::Dir { .. } => app.apply_scan(msg),
+                    ScanMsg::Done { .. } => return false,
+                }
+            }
+            true
+        });
+        for path in std::mem::take(&mut app.subscan_requested) {
+            subscans.push(spawn_scanner(path));
         }
         for msg in watch_rx.try_iter().take(MAX_MSGS_PER_FRAME) {
             match msg {
@@ -95,6 +111,7 @@ fn main() -> io::Result<()> {
         if app.rescan_requested {
             app.rescan_requested = false;
             app.reset(Instant::now());
+            subscans.clear();
             scan_rx = spawn_scanner(root.clone());
         }
     }
