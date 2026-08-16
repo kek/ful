@@ -106,6 +106,22 @@ pub fn spark(ring: &[i64; RING_BUCKETS]) -> String {
         .collect()
 }
 
+/// Braille spinner frames for the footer's delete-progress indicator.
+pub const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// Format a count with thousands separators: 12431 -> "12,431".
+pub fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 pub fn signed_rate(glow: f64) -> String {
     let sign = if glow >= 0.0 { "+" } else { "-" };
     format!("{}{}", sign, human_rate(glow.abs()))
@@ -160,7 +176,7 @@ pub fn draw(app: &App, frame: &mut Frame, now: Instant) {
 
     draw_title(app, frame, title_area);
     draw_rows(app, frame, table_area, now);
-    draw_footer(app, frame, footer_area);
+    draw_footer(app, frame, footer_area, now);
 
     if app.show_help {
         draw_help(frame, area);
@@ -293,12 +309,27 @@ fn draw_rows(app: &App, frame: &mut Frame, area: Rect, now: Instant) {
     frame.render_widget(table, area);
 }
 
-fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
+fn draw_footer(app: &App, frame: &mut Frame, area: Rect, now: Instant) {
     let sort = match app.sort {
         SortMode::Size => "size",
         SortMode::Rate => "rate",
     };
     let left = format!(" q quit  ? help  r rescan  s sort:{sort}  d delete  ⏎ enter  u up");
+    if let Some(del) = &app.deleting {
+        // The loop redraws at least every ~100ms, so stepping the frame from
+        // elapsed time animates without any extra timer.
+        let spin = SPINNER
+            [(now.duration_since(app.started).as_millis() / 100) as usize % SPINNER.len()];
+        let right = format!("{spin} deleting {} — {} items ", del.label, thousands(del.items));
+        let [l, r] = Layout::horizontal([
+            Constraint::Min(0),
+            Constraint::Length(right.chars().count() as u16 + 1),
+        ])
+        .areas(area);
+        frame.render_widget(Paragraph::new(left).style(Style::new().dim()), l);
+        frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), r);
+        return;
+    }
     if let Some(err) = &app.last_error {
         let [l, r] = Layout::horizontal([
             Constraint::Min(0),
@@ -490,6 +521,37 @@ mod tests {
         app.show_help = true;
         let text = render(&app, 80, 14);
         assert!(text.contains("dum — disk usage monitor"));
+    }
+
+    #[test]
+    fn thousands_groups_digits() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(12431), "12,431");
+        assert_eq!(thousands(1_000_000), "1,000,000");
+    }
+
+    #[test]
+    fn footer_shows_delete_progress_with_spinner_and_count() {
+        let mut app = demo_app();
+        app.deleting = Some(crate::app::Deleting { label: "big/".into(), items: 12431 });
+        let text = render(&app, 100, 12);
+        assert!(text.contains("deleting big/"));
+        assert!(text.contains("12,431 items"));
+        assert!(
+            SPINNER.iter().any(|&c| text.contains(c)),
+            "footer must show a spinner frame"
+        );
+    }
+
+    #[test]
+    fn deleting_takes_precedence_over_stale_error() {
+        let mut app = demo_app();
+        app.last_error = Some("delete /r/x: Permission denied".into());
+        app.deleting = Some(crate::app::Deleting { label: "big/".into(), items: 3 });
+        let text = render(&app, 100, 12);
+        assert!(text.contains("deleting big/"));
+        assert!(!text.contains("Permission denied"));
     }
 
     #[test]

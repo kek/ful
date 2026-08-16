@@ -1,5 +1,6 @@
 mod activity;
 mod app;
+mod deleter;
 mod scanner;
 mod tree;
 mod ui;
@@ -15,6 +16,7 @@ use clap::Parser;
 use crossterm::event::{self, Event, KeyEventKind};
 
 use app::App;
+use deleter::DeleteMsg;
 use scanner::ScanMsg;
 use watcher::WatchMsg;
 
@@ -70,6 +72,8 @@ fn main() -> io::Result<()> {
     // moves into the tree). Their Done messages are dropped: only the main
     // scan may drive `scanning` and the footer stats.
     let mut subscans: Vec<Receiver<ScanMsg>> = Vec::new();
+    // The in-flight background delete's message stream, if one is running.
+    let mut delete_rx: Option<Receiver<DeleteMsg>> = None;
 
     while !app.should_quit {
         let now = Instant::now();
@@ -94,6 +98,14 @@ fn main() -> io::Result<()> {
                 WatchMsg::Degraded => app.watch_degraded = true,
             }
         }
+        if let Some(rx) = &delete_rx {
+            for msg in rx.try_iter().take(MAX_MSGS_PER_FRAME) {
+                app.apply_delete_msg(msg, now);
+            }
+            if app.deleting.is_none() {
+                delete_rx = None; // Done or Failed arrived; the thread is finished
+            }
+        }
         app.activity.evict(now);
 
         terminal.draw(|f| ui::draw(&app, f, now))?;
@@ -106,7 +118,11 @@ fn main() -> io::Result<()> {
             }
         }
 
-        app.process_confirmed_delete(Instant::now());
+        if let Some(target) = app.begin_delete() {
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || deleter::delete(target, tx));
+            delete_rx = Some(rx);
+        }
 
         if app.rescan_requested {
             app.rescan_requested = false;
