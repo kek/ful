@@ -11,7 +11,7 @@ use ratatui::Frame;
 use ful::format::{human_bytes, human_rate};
 
 use crate::activity::RING_BUCKETS;
-use crate::app::{App, SortMode};
+use crate::app::{App, DeleteTarget, SortMode};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Col {
@@ -165,6 +165,36 @@ pub fn draw(app: &App, frame: &mut Frame, now: Instant) {
     if app.show_help {
         draw_help(frame, area);
     }
+    if let Some(target) = &app.pending_delete {
+        draw_confirm_delete(target, frame, area);
+    }
+}
+
+fn draw_confirm_delete(target: &DeleteTarget, frame: &mut Frame, area: Rect) {
+    let mut name = target.name.to_string_lossy().into_owned();
+    if target.is_dir {
+        name.push('/');
+    }
+    let lines = vec![
+        Line::from(format!("Delete {} ({})?", name, human_bytes(target.size))),
+        Line::from(""),
+        Line::from("y = delete permanently · any other key = cancel").dim(),
+    ];
+    let w = (lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 4).min(area.width);
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let rect = Rect { x, y, width: w, height: h };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::Red))
+                .title(" delete? y/N "),
+        ),
+        rect,
+    );
 }
 
 fn draw_title(app: &App, frame: &mut Frame, area: Rect) {
@@ -268,7 +298,22 @@ fn draw_footer(app: &App, frame: &mut Frame, area: Rect) {
         SortMode::Size => "size",
         SortMode::Rate => "rate",
     };
-    let left = format!(" q quit  ? help  r rescan  s sort:{sort}  ⏎ enter  u up");
+    let left = format!(" q quit  ? help  r rescan  s sort:{sort}  d delete  ⏎ enter  u up");
+    if let Some(err) = &app.last_error {
+        let [l, r] = Layout::horizontal([
+            Constraint::Min(0),
+            Constraint::Length(err.chars().count() as u16 + 1),
+        ])
+        .areas(area);
+        frame.render_widget(Paragraph::new(left).style(Style::new().dim()), l);
+        frame.render_widget(
+            Paragraph::new(format!("{err} "))
+                .alignment(Alignment::Right)
+                .style(Style::new().fg(Color::Red)),
+            r,
+        );
+        return;
+    }
     let right = if app.scanning {
         format!("scanning… {} items ", app.items_seen)
     } else if let Some((dirs, files, errors)) = app.done_stats {
@@ -300,6 +345,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::from("  ⏎ / l / →      enter directory"),
         Line::from("  u / h / ← / ⌫  go up"),
         Line::from("  s              sort by size / change rate"),
+        Line::from("  d              delete selected entry (asks y/N)"),
         Line::from("  r              rescan"),
         Line::from("  ?              toggle this help"),
         Line::from("  q / Esc        quit"),
@@ -444,6 +490,37 @@ mod tests {
         app.show_help = true;
         let text = render(&app, 80, 14);
         assert!(text.contains("dum — disk usage monitor"));
+    }
+
+    #[test]
+    fn delete_confirmation_overlay_shows_name_size_and_choices() {
+        let mut app = demo_app();
+        // Arm the modal the way the user would: select "file.txt" and press d.
+        app.selected = 1; // size sort: [big, file.txt]
+        app.on_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Char('d')), Instant::now());
+        let text = render(&app, 80, 14);
+        assert!(text.contains("file.txt"));
+        assert!(text.contains(&human_bytes(1024)));
+        assert!(text.contains("y/N"));
+    }
+
+    #[test]
+    fn footer_mentions_delete_key() {
+        assert!(render(&demo_app(), 100, 12).contains("d delete"));
+    }
+
+    #[test]
+    fn footer_shows_last_error() {
+        let mut app = demo_app();
+        app.last_error = Some("delete /r/big: Permission denied".into());
+        assert!(render(&app, 100, 12).contains("Permission denied"));
+    }
+
+    #[test]
+    fn help_overlay_lists_delete() {
+        let mut app = demo_app();
+        app.show_help = true;
+        assert!(render(&app, 80, 20).contains("delete selected entry"));
     }
 
     #[test]

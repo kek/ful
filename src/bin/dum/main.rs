@@ -90,6 +90,8 @@ fn main() -> io::Result<()> {
             }
         }
 
+        app.process_confirmed_delete(Instant::now());
+
         if app.rescan_requested {
             app.rescan_requested = false;
             app.reset(Instant::now());

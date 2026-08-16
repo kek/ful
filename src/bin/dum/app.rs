@@ -1,6 +1,8 @@
 //! dum application state: applies scan/delta messages, handles navigation.
 
 use std::cmp::Ordering;
+use std::ffi::OsString;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -29,6 +31,26 @@ impl SortMode {
     }
 }
 
+/// Snapshot of the entry `d` was pressed on. A snapshot (not a NodeId) so a
+/// watcher removal between arming and confirming can't redirect the delete.
+pub struct DeleteTarget {
+    pub path: PathBuf,
+    pub name: OsString,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+impl DeleteTarget {
+    /// Permanently remove the target from disk (recursively for directories).
+    pub fn execute(&self) -> io::Result<()> {
+        if self.is_dir {
+            std::fs::remove_dir_all(&self.path)
+        } else {
+            std::fs::remove_file(&self.path)
+        }
+    }
+}
+
 pub struct App {
     pub tree: Tree,
     pub activity: ActivityMap,
@@ -42,6 +64,11 @@ pub struct App {
     pub show_help: bool,
     pub should_quit: bool,
     pub rescan_requested: bool,
+    /// Set by `d`: the entry awaiting y/N confirmation in the modal.
+    pub pending_delete: Option<DeleteTarget>,
+    /// Set by `y`: a confirmed delete for the main loop to perform.
+    pub delete_confirmed: Option<DeleteTarget>,
+    pub last_error: Option<String>,
     pub items_seen: u64,
     pub done_stats: Option<(u64, u64, u64)>, // dirs, files, errors
 }
@@ -63,6 +90,9 @@ impl App {
             show_help: false,
             should_quit: false,
             rescan_requested: false,
+            pending_delete: None,
+            delete_confirmed: None,
+            last_error: None,
             items_seen: 0,
             done_stats: None,
         }
@@ -150,6 +180,31 @@ impl App {
         }
     }
 
+    /// Perform a `y`-confirmed delete: remove from disk, then drop the subtree
+    /// from the tree (so it works under --no-watch too; the watcher's own
+    /// Removed event for the same path is a harmless no-op). Failures land in
+    /// `last_error` and leave the tree untouched.
+    pub fn process_confirmed_delete(&mut self, now: Instant) {
+        let Some(target) = self.delete_confirmed.take() else { return };
+        match target.execute() {
+            Ok(()) => {
+                self.last_error = None;
+                self.apply_delta(
+                    DeltaMsg {
+                        path: target.path,
+                        kind: DeltaKind::Removed,
+                        new_size: None,
+                        is_dir: target.is_dir,
+                    },
+                    now,
+                );
+            }
+            Err(e) => {
+                self.last_error = Some(format!("delete {}: {}", target.path.display(), e));
+            }
+        }
+    }
+
     fn record_chain(&mut self, id: NodeId, delta: i64, now: Instant) {
         for anc in self.tree.ancestors_inclusive(id) {
             self.activity.record(anc, delta, now);
@@ -186,11 +241,30 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent, now: Instant) {
+        // The confirm modal swallows every key: y confirms, anything else cancels.
+        if let Some(target) = self.pending_delete.take() {
+            if key.code == KeyCode::Char('y') {
+                self.delete_confirmed = Some(target);
+            }
+            return;
+        }
         match key.code {
             KeyCode::Esc if self.show_help => self.show_help = false,
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('r') => self.rescan_requested = true,
+            KeyCode::Char('d') => {
+                let kids = self.sorted_children(self.current, now);
+                if let Some(&id) = kids.get(self.selected) {
+                    let node = self.tree.get(id);
+                    self.pending_delete = Some(DeleteTarget {
+                        path: self.tree.path_of(id),
+                        name: node.name.clone(),
+                        size: node.size,
+                        is_dir: node.is_dir,
+                    });
+                }
+            }
             KeyCode::Char('s') => {
                 // Keep the cursor on the same entry across the reorder.
                 let anchor = self.sorted_children(self.current, now).get(self.selected).copied();
@@ -433,6 +507,150 @@ mod tests {
         assert!(app.rescan_requested);
         app.on_key(KeyEvent::from(KeyCode::Char('q')), now);
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn d_key_arms_delete_confirmation_for_selected_entry() {
+        let mut app = scanned_app();
+        // Size sort puts "a" (100) first; it's selected.
+        app.on_key(KeyEvent::from(KeyCode::Char('d')), Instant::now());
+        let t = app.pending_delete.as_ref().expect("d should arm a pending delete");
+        assert_eq!(t.path, PathBuf::from("/r/a"));
+        assert_eq!(t.name, OsString::from("a"));
+        assert_eq!(t.size, 100);
+        assert!(t.is_dir);
+    }
+
+    #[test]
+    fn d_key_with_nothing_selected_is_noop() {
+        let mut app = App::new(Path::new("/r"), Instant::now());
+        app.on_key(KeyEvent::from(KeyCode::Char('d')), Instant::now());
+        assert!(app.pending_delete.is_none());
+    }
+
+    #[test]
+    fn y_turns_pending_delete_into_confirmed_request() {
+        let mut app = scanned_app();
+        let now = Instant::now();
+        app.on_key(KeyEvent::from(KeyCode::Char('d')), now);
+        app.on_key(KeyEvent::from(KeyCode::Char('y')), now);
+        assert!(app.pending_delete.is_none());
+        let t = app.delete_confirmed.as_ref().expect("y should confirm the delete");
+        assert_eq!(t.path, PathBuf::from("/r/a"));
+    }
+
+    #[test]
+    fn any_other_key_cancels_pending_delete() {
+        let mut app = scanned_app();
+        let now = Instant::now();
+        app.on_key(KeyEvent::from(KeyCode::Char('d')), now);
+        // 'q' would quit outside the modal; here it must only cancel.
+        app.on_key(KeyEvent::from(KeyCode::Char('q')), now);
+        assert!(app.pending_delete.is_none());
+        assert!(app.delete_confirmed.is_none());
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn navigation_is_inert_while_delete_pending() {
+        let mut app = scanned_app();
+        let now = Instant::now();
+        app.on_key(KeyEvent::from(KeyCode::Char('d')), now);
+        app.on_key(KeyEvent::from(KeyCode::Char('j')), now); // cancels, must not move
+        assert_eq!(app.selected, 0);
+        assert!(app.pending_delete.is_none());
+    }
+
+    /// App over a real tempdir containing one file, scanned into the tree.
+    fn app_on_disk() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("victim.txt"), vec![0u8; 100]).unwrap();
+        let mut app = App::new(dir.path(), Instant::now());
+        app.apply_scan(ScanMsg::Dir {
+            path: dir.path().to_path_buf(),
+            entries: vec![entry("victim.txt", 100, false)],
+            denied: false,
+        });
+        app.apply_scan(ScanMsg::Done { dirs: 0, files: 1, errors: 0 });
+        (dir, app)
+    }
+
+    #[test]
+    fn confirmed_delete_removes_from_disk_and_tree() {
+        let (dir, mut app) = app_on_disk();
+        let now = Instant::now();
+        app.on_key(KeyEvent::from(KeyCode::Char('d')), now);
+        app.on_key(KeyEvent::from(KeyCode::Char('y')), now);
+        app.process_confirmed_delete(now);
+        assert!(!dir.path().join("victim.txt").exists());
+        assert!(app.tree.lookup(&dir.path().join("victim.txt")).is_none());
+        assert_eq!(app.tree.get(app.tree.root).size, 0);
+        assert!(app.delete_confirmed.is_none());
+        assert!(app.last_error.is_none());
+    }
+
+    #[test]
+    fn failed_delete_sets_error_and_keeps_tree() {
+        let (dir, mut app) = app_on_disk();
+        let now = Instant::now();
+        std::fs::remove_file(dir.path().join("victim.txt")).unwrap(); // vanish underneath
+        app.on_key(KeyEvent::from(KeyCode::Char('d')), now);
+        app.on_key(KeyEvent::from(KeyCode::Char('y')), now);
+        app.process_confirmed_delete(now);
+        assert!(app.last_error.is_some());
+        assert!(app.tree.lookup(&dir.path().join("victim.txt")).is_some());
+        assert_eq!(app.tree.get(app.tree.root).size, 100);
+    }
+
+    #[test]
+    fn process_without_confirmation_is_noop() {
+        let (dir, mut app) = app_on_disk();
+        app.process_confirmed_delete(Instant::now());
+        assert!(dir.path().join("victim.txt").exists());
+        assert!(app.last_error.is_none());
+    }
+
+    #[test]
+    fn execute_removes_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("victim.txt");
+        std::fs::write(&f, b"bytes").unwrap();
+        let t = DeleteTarget {
+            path: f.clone(),
+            name: OsString::from("victim.txt"),
+            size: 5,
+            is_dir: false,
+        };
+        t.execute().unwrap();
+        assert!(!f.exists());
+    }
+
+    #[test]
+    fn execute_removes_a_directory_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("inner.txt"), b"x").unwrap();
+        let t = DeleteTarget {
+            path: sub.clone(),
+            name: OsString::from("sub"),
+            size: 1,
+            is_dir: true,
+        };
+        t.execute().unwrap();
+        assert!(!sub.exists());
+    }
+
+    #[test]
+    fn execute_on_missing_path_reports_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = DeleteTarget {
+            path: dir.path().join("gone"),
+            name: OsString::from("gone"),
+            size: 0,
+            is_dir: false,
+        };
+        assert!(t.execute().is_err());
     }
 
     #[test]

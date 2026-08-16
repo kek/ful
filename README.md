@@ -31,9 +31,11 @@ Keys: `q`/Esc quit · `?` help · `a` toggle pseudo filesystems.
     dum --no-watch PATH  # plain explorer, no live updates
 
 Keys: arrows/`hjkl` move · `⏎` enter · `u`/`⌫` up ·
-`s` sort (size/rate) · `r` rescan · `?` help · `q`/Esc quit.
+`s` sort (size/rate) · `d` delete · `r` rescan · `?` help · `q`/Esc quit.
 
-dum is read-only: it never modifies, moves, or deletes anything.
+dum never touches your files on its own. The one exception is `d`, which
+permanently deletes the selected file or directory — and only after you
+confirm with `y` in a prompt showing the name and size.
 
 ## Notes
 
